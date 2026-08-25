@@ -60,7 +60,7 @@ func TestRender(t *testing.T) {
 	assertOrder(t, index, "ExampleController", "ZuluController")
 	assertOrder(t, index, "Item", "Mode")
 	assertOrder(t, index, "Mode", "Request")
-	if !strings.Contains(index, "Controllers: 2") || !strings.Contains(index, "Methods: 3") || !strings.Contains(index, "Types: 3") || !strings.Contains(index, "| [ExampleController](controllers/ExampleController.md) | 2 | ExampleController runs examples. |") {
+	if !strings.Contains(index, "- Controllers: 2") || !strings.Contains(index, "- Methods: 3") || !strings.Contains(index, "- Types: 3") || !strings.Contains(index, "| [ExampleController](controllers/ExampleController.md) | 2 | ExampleController runs examples. |") {
 		t.Fatalf("index lacks counts:\n%s", index)
 	}
 

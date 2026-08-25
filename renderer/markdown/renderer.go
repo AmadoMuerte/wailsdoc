@@ -121,7 +121,7 @@ func renderIndex(title string, controllers []schema.Controller, types []schema.T
 	for _, controller := range controllers {
 		methodCount += len(controller.Methods)
 	}
-	fmt.Fprintf(&output, "Controllers: %d  \nMethods: %d  \nTypes: %d\n\n", len(controllers), methodCount, len(types))
+	fmt.Fprintf(&output, "- Controllers: %d\n- Methods: %d\n- Types: %d\n\n", len(controllers), methodCount, len(types))
 	output.WriteString("## Controllers\n\n| Controller | Methods | Description |\n| --- | ---: | --- |\n")
 	for _, controller := range controllers {
 		fmt.Fprintf(&output, "| [%s](controllers/%s.md) | %d | %s |\n", controller.Name, controller.Name, len(controller.Methods), tableText(controller.Description))
