@@ -34,7 +34,7 @@ jobs:
           node-version: 22
       - run: go build -o wailsdoc ./cmd/wailsdoc
       - run: mkdir fixture && cp -R testdata/basic/. fixture/
-      - run: ./wailsdoc init --package ./app --ui vitepress --name Basic
+      - run: ../wailsdoc init --package ./app --ui vitepress --name Basic
         working-directory: fixture
       - run: ../wailsdoc generate
         working-directory: fixture

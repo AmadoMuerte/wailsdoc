@@ -19,6 +19,7 @@ func TestGenericProject(t *testing.T) {
 	copyFixture(t, fixture, root)
 	cfg := config.Defaults()
 	cfg.Project.Name = "Basic"
+	cfg.Project.Title = "Basic API"
 	cfg.Scan.Packages = []string{"./app"}
 	first, err := wailsdoc.Generate(context.Background(), root, cfg)
 	if err != nil {
@@ -39,6 +40,10 @@ func TestGenericProject(t *testing.T) {
 		if !strings.Contains(string(markdown), expected) {
 			t.Fatalf("Markdown lacks %q", expected)
 		}
+	}
+	index, _ := os.ReadFile(filepath.Join(root, cfg.Output.Markdown, "README.md"))
+	if !strings.Contains(string(index), "# Basic API") {
+		t.Fatal("project title was not rendered")
 	}
 	if err := wailsdoc.Check(context.Background(), root, cfg); err != nil {
 		t.Fatal(err)

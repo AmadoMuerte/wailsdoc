@@ -31,6 +31,10 @@ type usage struct {
 }
 
 func Render(api schema.API, outputDir string) (Coverage, error) {
+	return RenderTitle(api, outputDir, "Wails API")
+}
+
+func RenderTitle(api schema.API, outputDir, title string) (Coverage, error) {
 	controllers := append([]schema.Controller(nil), api.Controllers...)
 	types := append([]schema.Type(nil), api.Types...)
 	sort.Slice(controllers, func(i, j int) bool { return controllers[i].Name < controllers[j].Name })
@@ -62,7 +66,7 @@ func Render(api schema.API, outputDir string) (Coverage, error) {
 	if err := os.MkdirAll(filepath.Join(temporary, "types"), 0o755); err != nil {
 		return Coverage{}, fmt.Errorf("create type output: %w", err)
 	}
-	if err := write(filepath.Join(temporary, "README.md"), renderIndex(controllers, types)); err != nil {
+	if err := write(filepath.Join(temporary, "README.md"), renderIndex(title, controllers, types)); err != nil {
 		return Coverage{}, err
 	}
 	if err := write(filepath.Join(temporary, "METHODS.md"), renderMethodIndex(controllers)); err != nil {
@@ -108,9 +112,9 @@ func coverageOf(controllers []schema.Controller, types []schema.Type) Coverage {
 	return result
 }
 
-func renderIndex(controllers []schema.Controller, types []schema.Type) string {
+func renderIndex(title string, controllers []schema.Controller, types []schema.Type) string {
 	var output strings.Builder
-	output.WriteString("# Wails API\n\n")
+	fmt.Fprintf(&output, "# %s\n\n", title)
 	output.WriteString(warning)
 	output.WriteString("Generated automatically from the public Wails backend API.\n\n")
 	methodCount := 0

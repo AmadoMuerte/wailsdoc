@@ -39,7 +39,7 @@ func Generate(ctx context.Context, root string, cfg config.Config) (schema.API, 
 			return schema.API{}, err
 		}
 	}
-	if _, err := markdown.Render(api, filepath.Join(root, cfg.Output.Markdown)); err != nil {
+	if _, err := markdown.RenderTitle(api, filepath.Join(root, cfg.Output.Markdown), cfg.Project.Title); err != nil {
 		return schema.API{}, err
 	}
 	if cfg.UI.Provider == "vitepress" {
