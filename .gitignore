@@ -1,0 +1,5 @@
+/wailsdoc
+/docs/site/node_modules/
+/docs/site/.vitepress/cache/
+/docs/site/.vitepress/dist/
+/docs/site/api/

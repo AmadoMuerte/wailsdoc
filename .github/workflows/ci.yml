@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: test -z "$(gofmt -l .)"
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build ./cmd/wailsdoc
+      - run: '! grep -R "github.com/AmadoMuerte/Waxlight-launcher" --include="*.go" .'
+
+  vitepress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: go build -o wailsdoc ./cmd/wailsdoc
+      - run: mkdir fixture && cp -R testdata/basic/. fixture/
+      - run: ./wailsdoc init --package ./app --ui vitepress --name Basic
+        working-directory: fixture
+      - run: ../wailsdoc generate
+        working-directory: fixture
+      - run: npm install
+        working-directory: fixture/docs/site
+      - run: ../wailsdoc build
+        working-directory: fixture
