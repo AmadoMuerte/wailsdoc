@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	"github.com/AmadoMuerte/wailsdoc"
 	"github.com/AmadoMuerte/wailsdoc/config"
 	"github.com/AmadoMuerte/wailsdoc/integration/vitepress"
 )
 
-var version = "dev"
+var version string
 
 func main() {
 	if len(os.Args) < 2 {
@@ -30,7 +31,7 @@ func main() {
 	case "serve", "build":
 		err = uiCommand(os.Args[1], os.Args[2:])
 	case "version", "--version":
-		fmt.Println(version)
+		fmt.Println(buildVersion())
 	case "help", "--help", "-h":
 		help()
 	default:
@@ -40,6 +41,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "wailsdoc:", err)
 		os.Exit(1)
 	}
+}
+
+func buildVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
 }
 
 func initCommand(args []string) error {
