@@ -145,7 +145,7 @@ func renderMethodIndex(controllers []schema.Controller) string {
 	output.WriteString("| Method | Controller | Returns | Description |\n| --- | --- | --- | --- |\n")
 	for _, controller := range controllers {
 		for _, method := range controller.Methods {
-			fmt.Fprintf(&output, "| [%s](controllers/%s.md#%s) | [%s](controllers/%s.md) | `%s` | %s |\n", method.Name, controller.Name, anchor(method.Name), controller.Name, controller.Name, tsReturnType(method), tableText(method.Description))
+			fmt.Fprintf(&output, "| [%s](controllers/%s.md#%s) | [%s](controllers/%s.md) | %s | %s |\n", method.Name, controller.Name, anchor(method.Name), controller.Name, controller.Name, tableCode(tsReturnType(method)), tableText(method.Description))
 		}
 	}
 	return output.String()
@@ -198,7 +198,7 @@ func renderController(controller schema.Controller, typeFiles map[string]string,
 				if result.GoType == "error" {
 					continue
 				}
-				fmt.Fprintf(&output, "| %s | `%s` |\n", renderGoType(result.GoType, result.TypeRef, typeFiles, "../types/"), valueTSType(result.TSType, result.GoType))
+				fmt.Fprintf(&output, "| %s | %s |\n", renderGoType(result.GoType, result.TypeRef, typeFiles, "../types/"), tableCode(valueTSType(result.TSType, result.GoType)))
 			}
 		}
 		if len(method.Errors) > 0 {
@@ -261,7 +261,7 @@ func renderType(typ schema.Type, typeFiles map[string]string, usages []usage) st
 			if field.Nullable || strings.HasPrefix(field.GoType, "*") {
 				nullable = "Yes"
 			}
-			fmt.Fprintf(&output, "| `%s` | `%s` | %s | `%s` | %s | %s |", field.Name, field.JSONName, renderGoType(field.GoType, field.TypeRef, typeFiles, ""), valueTSType(field.TSType, field.GoType), optional, nullable)
+			fmt.Fprintf(&output, "| `%s` | `%s` | %s | %s | %s | %s |", field.Name, field.JSONName, renderGoType(field.GoType, field.TypeRef, typeFiles, ""), tableCode(valueTSType(field.TSType, field.GoType)), optional, nullable)
 			if hasDescriptions {
 				fmt.Fprintf(&output, " %s |", tableText(field.Description))
 			}
@@ -592,6 +592,8 @@ func tableText(value string) string {
 	value = strings.ReplaceAll(value, "|", "\\|")
 	return strings.ReplaceAll(value, "\n", "<br>")
 }
+
+func tableCode(value string) string { return "`" + tableText(value) + "`" }
 
 func write(path, contents string) error {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
