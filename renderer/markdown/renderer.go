@@ -192,7 +192,7 @@ func renderController(controller schema.Controller, typeFiles map[string]string,
 				fmt.Fprintf(&output, "| `%s` | %s |\n", parameter.Name, renderGoType(parameter.GoType, parameter.TypeRef, typeFiles, "../types/"))
 			}
 		}
-		if len(method.Returns) > 0 {
+		if hasValueReturn(method) {
 			output.WriteString("\n### Returns\n\n| Go type | TypeScript type |\n| --- | --- |\n")
 			for _, result := range method.Returns {
 				if result.GoType == "error" {
@@ -375,6 +375,15 @@ func unresolvedWarnings(controllers []schema.Controller, types []schema.Type, ty
 	}
 	sort.Strings(warnings)
 	return warnings
+}
+
+func hasValueReturn(method schema.Method) bool {
+	for _, result := range method.Returns {
+		if result.GoType != "error" {
+			return true
+		}
+	}
+	return false
 }
 
 func tsSignature(method schema.Method) string {
