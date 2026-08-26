@@ -93,18 +93,19 @@ func (s *state) scanPackage(pkg *packages.Package, suffix string) {
 			if !ok {
 				continue
 			}
+			description, errors := methodComment(pkg, function)
 			method := schema.Method{
-				Name: function.Name(), Description: objectComment(pkg, function),
+				Name: function.Name(), Description: description, Errors: errors,
 				Parameters: []schema.Parameter{}, Returns: []schema.Return{}, Source: s.source(pkg, function.Pos()),
 			}
 			for parameter := 0; parameter < signature.Params().Len(); parameter++ {
 				value := signature.Params().At(parameter)
-				method.Parameters = append(method.Parameters, schema.Parameter{Name: value.Name(), GoType: typeString(value.Type(), pkg.Types), TypeRef: typeRef(value.Type())})
+				method.Parameters = append(method.Parameters, schema.Parameter{Name: value.Name(), GoType: typeString(value.Type(), pkg.Types), TSType: tsType(value.Type()), TypeRef: typeRef(value.Type()), TypeRefs: typeRefs(value.Type()), Nullable: nullable(value.Type())})
 				s.resolve(value.Type())
 			}
 			for result := 0; result < signature.Results().Len(); result++ {
 				value := signature.Results().At(result)
-				method.Returns = append(method.Returns, schema.Return{Name: value.Name(), GoType: typeString(value.Type(), pkg.Types), TypeRef: typeRef(value.Type())})
+				method.Returns = append(method.Returns, schema.Return{Name: value.Name(), GoType: typeString(value.Type(), pkg.Types), TSType: tsType(value.Type()), TypeRef: typeRef(value.Type()), TypeRefs: typeRefs(value.Type()), Nullable: nullable(value.Type())})
 				s.resolve(value.Type())
 			}
 			controller.Methods = append(controller.Methods, method)
@@ -158,12 +159,14 @@ func (s *state) addType(object *types.TypeName, declared, underlying types.Type)
 			if skip {
 				continue
 			}
-			entry.Fields = append(entry.Fields, schema.Field{Name: field.Name(), JSONName: jsonName, OmitEmpty: omitEmpty, GoType: typeString(field.Type(), object.Pkg()), TypeRef: typeRef(field.Type()), Description: objectComment(pkg, field)})
+			entry.Fields = append(entry.Fields, schema.Field{Name: field.Name(), JSONName: jsonName, OmitEmpty: omitEmpty, Nullable: nullable(field.Type()), GoType: typeString(field.Type(), object.Pkg()), TSType: tsType(field.Type()), TypeRef: typeRef(field.Type()), TypeRefs: typeRefs(field.Type()), Description: objectComment(pkg, field)})
 			s.resolve(field.Type())
 		}
 	} else {
 		entry.GoType = typeString(declared, object.Pkg())
+		entry.TSType = tsType(underlying)
 		entry.TypeRef = typeRef(underlying)
+		entry.TypeRefs = typeRefs(underlying)
 		s.resolve(underlying)
 	}
 	s.api.Types = append(s.api.Types, entry)
@@ -239,6 +242,105 @@ func typeRef(typ types.Type) string {
 	default:
 		return ""
 	}
+}
+
+func typeRefs(typ types.Type) []string {
+	seen := map[string]bool{}
+	var result []string
+	var visit func(types.Type)
+	visit = func(typ types.Type) {
+		switch current := typ.(type) {
+		case *types.Named:
+			if current.Obj().Pkg() != nil {
+				name := qualified(current.Obj())
+				if !seen[name] {
+					seen[name] = true
+					result = append(result, name)
+				}
+			}
+		case *types.Pointer:
+			visit(current.Elem())
+		case *types.Slice:
+			visit(current.Elem())
+		case *types.Array:
+			visit(current.Elem())
+		case *types.Map:
+			visit(current.Key())
+			visit(current.Elem())
+		case *types.Alias:
+			if current.Obj().Pkg() != nil {
+				name := qualified(current.Obj())
+				if !seen[name] {
+					seen[name] = true
+					result = append(result, name)
+				}
+			}
+		}
+	}
+	visit(typ)
+	return result
+}
+
+func nullable(typ types.Type) bool {
+	_, ok := typ.(*types.Pointer)
+	return ok
+}
+
+func tsType(typ types.Type) string {
+	switch current := typ.(type) {
+	case *types.Pointer:
+		return tsType(current.Elem()) + " | null"
+	case *types.Slice:
+		return arrayTSType(current.Elem())
+	case *types.Array:
+		return arrayTSType(current.Elem())
+	case *types.Map:
+		return "Record<" + tsMapKey(current.Key()) + ", " + tsType(current.Elem()) + ">"
+	case *types.Named:
+		if current.Obj().Pkg() != nil {
+			return current.Obj().Name()
+		}
+		return tsType(current.Underlying())
+	case *types.Alias:
+		if current.Obj().Pkg() != nil {
+			return current.Obj().Name()
+		}
+		return tsType(types.Unalias(current))
+	case *types.Basic:
+		if current.Kind() == types.Bool {
+			return "boolean"
+		}
+		if current.Kind() == types.String {
+			return "string"
+		}
+		if current.Kind() == types.UnsafePointer {
+			return "unknown"
+		}
+		if current.Info()&types.IsNumeric != 0 {
+			return "number"
+		}
+		return "unknown"
+	case *types.Interface:
+		return "unknown"
+	default:
+		return "unknown"
+	}
+}
+
+func arrayTSType(element types.Type) string {
+	value := tsType(element)
+	if strings.Contains(value, " | ") {
+		value = "(" + value + ")"
+	}
+	return value + "[]"
+}
+
+func tsMapKey(typ types.Type) string {
+	value := tsType(typ)
+	if value == "string" || value == "number" {
+		return value
+	}
+	return "string"
 }
 
 func typeString(typ types.Type, current *types.Package) string {
@@ -325,6 +427,35 @@ func objectComment(pkg *packages.Package, object types.Object) string {
 		}
 	}
 	return ""
+}
+
+func methodComment(pkg *packages.Package, object types.Object) (string, []schema.Error) {
+	text := objectComment(pkg, object)
+	lines := strings.Split(text, "\n")
+	var description []string
+	var errors []schema.Error
+	inErrors := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "Errors:" {
+			inErrors = true
+			continue
+		}
+		if inErrors {
+			if trimmed == "" {
+				continue
+			}
+			item := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+			code, detail, found := strings.Cut(item, ":")
+			if found && strings.TrimSpace(code) != "" {
+				errors = append(errors, schema.Error{Code: strings.TrimSpace(code), Description: strings.TrimSpace(detail)})
+				continue
+			}
+			inErrors = false
+		}
+		description = append(description, line)
+	}
+	return strings.TrimSpace(strings.Join(description, "\n")), errors
 }
 
 func commentText(group *ast.CommentGroup) string {

@@ -28,6 +28,7 @@ type usage struct {
 	Method     string
 	Kind       string
 	Name       string
+	Type       string
 }
 
 func Render(api schema.API, outputDir string) (Coverage, error) {
@@ -52,7 +53,11 @@ func RenderTitle(api schema.API, outputDir, title string) (Coverage, error) {
 	for _, controller := range controllers {
 		localPackages[packageName(controller.QualifiedName)] = true
 	}
-	usages := usagesOf(controllers, typeFiles)
+	usages := usagesOf(controllers, types, typeFiles)
+	typeIndex := make(map[string]schema.Type, len(types))
+	for _, typ := range types {
+		typeIndex[typ.QualifiedName] = typ
+	}
 	coverage := coverageOf(controllers, types)
 	coverage.Warnings = unresolvedWarnings(controllers, types, typeFiles, localPackages)
 
@@ -73,7 +78,7 @@ func RenderTitle(api schema.API, outputDir, title string) (Coverage, error) {
 		return Coverage{}, err
 	}
 	for _, controller := range controllers {
-		if err := write(filepath.Join(temporary, "controllers", controller.Name+".md"), renderController(controller, typeFiles)); err != nil {
+		if err := write(filepath.Join(temporary, "controllers", controller.Name+".md"), renderController(controller, typeFiles, typeIndex)); err != nil {
 			return Coverage{}, err
 		}
 	}
@@ -137,16 +142,16 @@ func renderMethodIndex(controllers []schema.Controller) string {
 	var output strings.Builder
 	output.WriteString("# Wails API Methods\n\n")
 	output.WriteString(warning)
-	output.WriteString("| Method | Description |\n| --- | --- |\n")
+	output.WriteString("| Method | Controller | Returns | Description |\n| --- | --- | --- | --- |\n")
 	for _, controller := range controllers {
 		for _, method := range controller.Methods {
-			fmt.Fprintf(&output, "| [%s.%s](controllers/%s.md#%s) | %s |\n", controller.Name, method.Name, controller.Name, anchor(method.Name), tableText(method.Description))
+			fmt.Fprintf(&output, "| [%s](controllers/%s.md#%s) | [%s](controllers/%s.md) | `%s` | %s |\n", method.Name, controller.Name, anchor(method.Name), controller.Name, controller.Name, tsReturnType(method), tableText(method.Description))
 		}
 	}
 	return output.String()
 }
 
-func renderController(controller schema.Controller, typeFiles map[string]string) string {
+func renderController(controller schema.Controller, typeFiles map[string]string, types map[string]schema.Type) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "# %s\n\n", controller.Name)
 	output.WriteString(warning)
@@ -156,13 +161,17 @@ func renderController(controller schema.Controller, typeFiles map[string]string)
 	referenced := map[string]bool{}
 	for _, method := range controller.Methods {
 		for _, parameter := range method.Parameters {
-			if _, ok := typeFiles[parameter.TypeRef]; ok {
-				referenced[parameter.TypeRef] = true
+			for _, reference := range refs(parameter.TypeRef, parameter.TypeRefs) {
+				if _, ok := typeFiles[reference]; ok {
+					referenced[reference] = true
+				}
 			}
 		}
 		for _, result := range method.Returns {
-			if _, ok := typeFiles[result.TypeRef]; ok {
-				referenced[result.TypeRef] = true
+			for _, reference := range refs(result.TypeRef, result.TypeRefs) {
+				if _, ok := typeFiles[reference]; ok {
+					referenced[reference] = true
+				}
 			}
 		}
 	}
@@ -172,10 +181,11 @@ func renderController(controller schema.Controller, typeFiles map[string]string)
 		fmt.Fprintf(&output, "- [%s](#%s)\n", method.Name, anchor(method.Name))
 	}
 	for _, method := range controller.Methods {
-		fmt.Fprintf(&output, "\n## %s\n\n### Signature\n\n```go\n%s\n```\n", method.Name, signature(method))
+		fmt.Fprintf(&output, "\n## %s\n", method.Name)
 		if method.Description != "" {
-			output.WriteString("\n### Description\n\n" + method.Description + "\n")
+			output.WriteString("\n" + method.Description + "\n")
 		}
+		fmt.Fprintf(&output, "\n### Go\n\n```go\n%s\n```\n\n### TypeScript\n\n```ts\n%s\n```\n", signature(method), tsSignature(method))
 		if len(method.Parameters) > 0 {
 			output.WriteString("\n### Parameters\n\n| Name | Type |\n| --- | --- |\n")
 			for _, parameter := range method.Parameters {
@@ -183,11 +193,25 @@ func renderController(controller schema.Controller, typeFiles map[string]string)
 			}
 		}
 		if len(method.Returns) > 0 {
-			output.WriteString("\n### Returns\n\n| Type |\n| --- |\n")
+			output.WriteString("\n### Returns\n\n| Go type | TypeScript type |\n| --- | --- |\n")
 			for _, result := range method.Returns {
-				fmt.Fprintf(&output, "| %s |\n", renderGoType(result.GoType, result.TypeRef, typeFiles, "../types/"))
+				if result.GoType == "error" {
+					continue
+				}
+				fmt.Fprintf(&output, "| %s | `%s` |\n", renderGoType(result.GoType, result.TypeRef, typeFiles, "../types/"), valueTSType(result.TSType, result.GoType))
 			}
 		}
+		if len(method.Errors) > 0 {
+			output.WriteString("\n### Errors\n\n")
+			for _, documentedError := range method.Errors {
+				fmt.Fprintf(&output, "- `%s`", documentedError.Code)
+				if documentedError.Description != "" {
+					fmt.Fprintf(&output, ": %s", documentedError.Description)
+				}
+				output.WriteString("\n")
+			}
+		}
+		output.WriteString("\n### Example\n\n```ts\n" + tsExample(method, types) + "\n```\n")
 		if method.Source.File != "" {
 			output.WriteString("\n### Source\n\n`")
 			output.WriteString(method.Source.File)
@@ -219,21 +243,25 @@ func renderType(typ schema.Type, typeFiles map[string]string, usages []usage) st
 		for _, field := range typ.Fields {
 			hasDescriptions = hasDescriptions || field.Description != ""
 		}
-		output.WriteString("\n## Fields\n\n| Go field | JSON field | Type | Omit empty |")
+		output.WriteString("\n## Fields\n\n| Go field | JSON field | Go type | TypeScript type | Optional | Nullable |")
 		if hasDescriptions {
 			output.WriteString(" Description |")
 		}
-		output.WriteString("\n| --- | --- | --- | --- |")
+		output.WriteString("\n| --- | --- | --- | --- | --- | --- |")
 		if hasDescriptions {
 			output.WriteString(" --- |")
 		}
 		output.WriteString("\n")
 		for _, field := range typ.Fields {
-			omitEmpty := "No"
+			optional := "No"
 			if field.OmitEmpty {
-				omitEmpty = "Yes"
+				optional = "Yes"
 			}
-			fmt.Fprintf(&output, "| `%s` | `%s` | %s | %s |", field.Name, field.JSONName, renderGoType(field.GoType, field.TypeRef, typeFiles, ""), omitEmpty)
+			nullable := "No"
+			if field.Nullable || strings.HasPrefix(field.GoType, "*") {
+				nullable = "Yes"
+			}
+			fmt.Fprintf(&output, "| `%s` | `%s` | %s | `%s` | %s | %s |", field.Name, field.JSONName, renderGoType(field.GoType, field.TypeRef, typeFiles, ""), valueTSType(field.TSType, field.GoType), optional, nullable)
 			if hasDescriptions {
 				fmt.Fprintf(&output, " %s |", tableText(field.Description))
 			}
@@ -243,11 +271,22 @@ func renderType(typ schema.Type, typeFiles map[string]string, usages []usage) st
 	if len(usages) > 0 {
 		output.WriteString("\n## Used by\n\n")
 		for _, use := range usages {
-			fmt.Fprintf(&output, "- [%s.%s](../controllers/%s.md#%s) — %s", use.Controller, use.Method, use.Controller, anchor(use.Method), use.Kind)
+			if use.Controller != "" {
+				fmt.Fprintf(&output, "- [%s.%s](../controllers/%s.md#%s) — %s", use.Controller, use.Method, use.Controller, anchor(use.Method), use.Kind)
+			} else {
+				fmt.Fprintf(&output, "- [%s](%s.md) — field", typeName(use.Type), typeName(use.Type))
+			}
 			if use.Name != "" {
 				fmt.Fprintf(&output, " `%s`", use.Name)
 			}
 			output.WriteString("\n")
+		}
+	}
+	related := relatedTypes(typ, typeFiles)
+	if len(related) > 0 {
+		output.WriteString("\n## Related types\n\n")
+		for _, reference := range related {
+			fmt.Fprintf(&output, "- [%s](%s)\n", typeName(reference), typeFiles[reference])
 		}
 	}
 	if typ.Source.File != "" {
@@ -261,18 +300,31 @@ func renderType(typ schema.Type, typeFiles map[string]string, usages []usage) st
 	return output.String()
 }
 
-func usagesOf(controllers []schema.Controller, typeFiles map[string]string) map[string][]usage {
+func usagesOf(controllers []schema.Controller, types []schema.Type, typeFiles map[string]string) map[string][]usage {
 	result := map[string][]usage{}
 	for _, controller := range controllers {
 		for _, method := range controller.Methods {
 			for _, parameter := range method.Parameters {
-				if _, ok := typeFiles[parameter.TypeRef]; ok {
-					result[parameter.TypeRef] = append(result[parameter.TypeRef], usage{Controller: controller.Name, Method: method.Name, Kind: "parameter", Name: parameter.Name})
+				for _, reference := range refs(parameter.TypeRef, parameter.TypeRefs) {
+					if _, ok := typeFiles[reference]; ok {
+						result[reference] = append(result[reference], usage{Controller: controller.Name, Method: method.Name, Kind: "parameter", Name: parameter.Name})
+					}
 				}
 			}
 			for _, returned := range method.Returns {
-				if _, ok := typeFiles[returned.TypeRef]; ok {
-					result[returned.TypeRef] = append(result[returned.TypeRef], usage{Controller: controller.Name, Method: method.Name, Kind: "return value"})
+				for _, reference := range refs(returned.TypeRef, returned.TypeRefs) {
+					if _, ok := typeFiles[reference]; ok {
+						result[reference] = append(result[reference], usage{Controller: controller.Name, Method: method.Name, Kind: "return value"})
+					}
+				}
+			}
+		}
+	}
+	for _, typ := range types {
+		for _, field := range typ.Fields {
+			for _, reference := range refs(field.TypeRef, field.TypeRefs) {
+				if reference != typ.QualifiedName && typeFiles[reference] != "" {
+					result[reference] = append(result[reference], usage{Type: typ.QualifiedName, Name: field.JSONName})
 				}
 			}
 		}
@@ -280,7 +332,7 @@ func usagesOf(controllers []schema.Controller, typeFiles map[string]string) map[
 	for reference := range result {
 		sort.Slice(result[reference], func(i, j int) bool {
 			left, right := result[reference][i], result[reference][j]
-			return left.Controller+"\x00"+left.Method+"\x00"+left.Kind+"\x00"+left.Name < right.Controller+"\x00"+right.Method+"\x00"+right.Kind+"\x00"+right.Name
+			return left.Controller+"\x00"+left.Type+"\x00"+left.Method+"\x00"+left.Kind+"\x00"+left.Name < right.Controller+"\x00"+right.Type+"\x00"+right.Method+"\x00"+right.Kind+"\x00"+right.Name
 		})
 	}
 	return result
@@ -296,17 +348,25 @@ func unresolvedWarnings(controllers []schema.Controller, types []schema.Type, ty
 	for _, controller := range controllers {
 		for _, method := range controller.Methods {
 			for _, parameter := range method.Parameters {
-				check(parameter.TypeRef)
+				for _, reference := range refs(parameter.TypeRef, parameter.TypeRefs) {
+					check(reference)
+				}
 			}
 			for _, result := range method.Returns {
-				check(result.TypeRef)
+				for _, reference := range refs(result.TypeRef, result.TypeRefs) {
+					check(reference)
+				}
 			}
 		}
 	}
 	for _, typ := range types {
-		check(typ.TypeRef)
+		for _, reference := range refs(typ.TypeRef, typ.TypeRefs) {
+			check(reference)
+		}
 		for _, field := range typ.Fields {
-			check(field.TypeRef)
+			for _, reference := range refs(field.TypeRef, field.TypeRefs) {
+				check(reference)
+			}
 		}
 	}
 	warnings := make([]string, 0, len(seen))
@@ -315,6 +375,148 @@ func unresolvedWarnings(controllers []schema.Controller, types []schema.Type, ty
 	}
 	sort.Strings(warnings)
 	return warnings
+}
+
+func tsSignature(method schema.Method) string {
+	parameters := make([]string, len(method.Parameters))
+	for index, parameter := range method.Parameters {
+		parameters[index] = parameter.Name + ": " + valueTSType(parameter.TSType, parameter.GoType)
+	}
+	return method.Name + "(" + strings.Join(parameters, ", ") + "): Promise<" + tsReturnType(method) + ">"
+}
+
+func tsReturnType(method schema.Method) string {
+	var returns []string
+	for _, result := range method.Returns {
+		if result.GoType != "error" {
+			returns = append(returns, valueTSType(result.TSType, result.GoType))
+		}
+	}
+	if len(returns) == 0 {
+		return "void"
+	}
+	if len(returns) == 1 {
+		return returns[0]
+	}
+	return "[" + strings.Join(returns, ", ") + "]"
+}
+
+func valueTSType(value, goType string) string {
+	if value != "" {
+		return value
+	}
+	value = strings.TrimPrefix(goType, "*")
+	nullable := value != goType
+	switch {
+	case strings.HasPrefix(value, "[]"):
+		value = valueTSType("", strings.TrimPrefix(value, "[]")) + "[]"
+	case strings.HasPrefix(value, "map["):
+		if end := strings.Index(value, "]"); end >= 0 {
+			value = "Record<" + valueTSType("", value[4:end]) + ", " + valueTSType("", value[end+1:]) + ">"
+		}
+	case value == "string":
+	case value == "bool":
+		value = "boolean"
+	case value == "error":
+		value = "never"
+	case strings.Contains(" int int8 int16 int32 int64 uint uint8 uint16 uint32 uint64 uintptr float32 float64 ", " "+value+" "):
+		value = "number"
+	default:
+		value = typeName(value)
+	}
+	if nullable {
+		value += " | null"
+	}
+	return value
+}
+
+func tsExample(method schema.Method, types map[string]schema.Type) string {
+	arguments := make([]string, len(method.Parameters))
+	for index, parameter := range method.Parameters {
+		arguments[index] = tsValue(parameter.GoType, parameter.TypeRef, types, 0, map[string]bool{})
+	}
+	name := lowerFirst(method.Name)
+	prefix := "await "
+	if tsReturnType(method) != "void" {
+		prefix = "const " + name + " = await "
+	}
+	return prefix + method.Name + "(" + strings.Join(arguments, ", ") + ")"
+}
+
+func tsValue(goType, reference string, types map[string]schema.Type, depth int, seen map[string]bool) string {
+	if strings.HasPrefix(goType, "*") {
+		return "null"
+	}
+	if strings.HasPrefix(goType, "[]") || strings.HasPrefix(goType, "[") {
+		return "[]"
+	}
+	if strings.HasPrefix(goType, "map[") {
+		return "{}"
+	}
+	if typ, ok := types[reference]; ok && typ.Kind == "struct" {
+		if depth >= 2 || seen[reference] {
+			return "{}"
+		}
+		seen[reference] = true
+		var fields []string
+		for _, field := range typ.Fields {
+			if field.OmitEmpty {
+				continue
+			}
+			fields = append(fields, field.JSONName+": "+tsValue(field.GoType, field.TypeRef, types, depth+1, seen))
+		}
+		delete(seen, reference)
+		return "{ " + strings.Join(fields, ", ") + " }"
+	}
+	switch valueTSType("", goType) {
+	case "string":
+		return `""`
+	case "boolean":
+		return "false"
+	case "number":
+		return "0"
+	default:
+		return "{}"
+	}
+}
+
+func relatedTypes(typ schema.Type, typeFiles map[string]string) []string {
+	seen := map[string]bool{}
+	for _, reference := range refs(typ.TypeRef, typ.TypeRefs) {
+		if reference != typ.QualifiedName && typeFiles[reference] != "" {
+			seen[reference] = true
+		}
+	}
+	for _, field := range typ.Fields {
+		for _, reference := range refs(field.TypeRef, field.TypeRefs) {
+			if reference != typ.QualifiedName && typeFiles[reference] != "" {
+				seen[reference] = true
+			}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for reference := range seen {
+		result = append(result, reference)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func refs(primary string, all []string) []string {
+	if len(all) > 0 {
+		return all
+	}
+	if primary != "" {
+		return []string{primary}
+	}
+	return nil
+}
+
+func lowerFirst(value string) string {
+	if value == "" {
+		return value
+	}
+	return strings.ToLower(value[:1]) + value[1:]
 }
 
 func signature(method schema.Method) string {
