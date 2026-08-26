@@ -88,6 +88,10 @@ func TestRender(t *testing.T) {
 	if strings.Contains(controller, "No description") {
 		t.Fatal("renderer invented a missing description")
 	}
+	undocumented := controller[strings.Index(controller, "## Undocumented"):]
+	if strings.Contains(undocumented, "### Returns") {
+		t.Fatalf("only-error method has an empty returns section:\n%s", undocumented)
+	}
 
 	request := readFile(t, filepath.Join(output, "types", "Request.md"))
 	for _, expected := range []string{
