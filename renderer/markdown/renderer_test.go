@@ -97,7 +97,7 @@ func TestRender(t *testing.T) {
 	for _, expected := range []string{
 		"Request contains input.",
 		"| `Name` | `name` | `string` | `string` | No | No | Human-readable name. |",
-		"| `Item` | `item` | `*`[`Item`](Item.md) | `Item | null` | Yes | Yes |",
+		"| `Item` | `item` | `*`[`Item`](Item.md) | `Item \\| null` | Yes | Yes |",
 		"| `When` | `when` | `time.Time` | `Time` | No | No |",
 		"[ExampleController.Run](../controllers/ExampleController.md#run) — parameter `request`",
 	} {
@@ -116,6 +116,9 @@ func TestRender(t *testing.T) {
 	methods := readFile(t, filepath.Join(output, "METHODS.md"))
 	if !strings.Contains(methods, "[Run](controllers/ExampleController.md#run) | [ExampleController]") {
 		t.Fatalf("method index lacks direct method link:\n%s", methods)
+	}
+	if !strings.Contains(methods, "`Item[]`") {
+		t.Fatalf("method index lacks escaped TypeScript return type:\n%s", methods)
 	}
 
 	validateLinks(t, output)
