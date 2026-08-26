@@ -25,20 +25,36 @@ func TestGenericProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Controllers) != 1 || len(first.Controllers[0].Methods) != 2 || len(first.Types) != 3 {
+	if len(first.Controllers) != 1 || len(first.Controllers[0].Methods) != 3 || len(first.Types) != 3 {
 		t.Fatalf("unexpected API: %#v", first)
 	}
 	user := first.Types[2]
 	if user.Name != "UserDTO" || len(user.Fields) != 9 || !user.Fields[4].OmitEmpty {
 		t.Fatalf("unexpected recursive DTO: %#v", user)
 	}
+	if user.Fields[0].Description != "ID uniquely identifies the user." || user.Fields[4].TSType != "UserDTO | null" || !user.Fields[4].Nullable {
+		t.Fatalf("field documentation or TypeScript metadata missing: %#v", user.Fields)
+	}
+	controller := first.Controllers[0]
+	if controller.Methods[0].Name != "GetUser" || len(controller.Methods[0].Errors) != 1 || controller.Methods[0].Errors[0].Code != "user_not_found" {
+		t.Fatalf("method errors missing: %#v", controller.Methods)
+	}
 	markdown, err := os.ReadFile(filepath.Join(root, cfg.Output.Markdown, "types", "UserDTO.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"UserDTO is a recursive", "ProfileDTO.md", "UserController.GetUser", "UserController.ListUsers"} {
+	for _, expected := range []string{"UserDTO is a recursive", "ProfileDTO.md", "UserController.GetUser", "UserController.ListUsers", "ID uniquely identifies the user.", "Optional", "Nullable"} {
 		if !strings.Contains(string(markdown), expected) {
 			t.Fatalf("Markdown lacks %q", expected)
+		}
+	}
+	controllerMarkdown, err := os.ReadFile(filepath.Join(root, cfg.Output.Markdown, "controllers", "UserController.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"GetUser(id: number): Promise<UserDTO | null>", "`user_not_found`", "const getUser = await GetUser(0)", "Ping(): Promise<void>"} {
+		if !strings.Contains(string(controllerMarkdown), expected) {
+			t.Fatalf("controller Markdown lacks %q", expected)
 		}
 	}
 	index, _ := os.ReadFile(filepath.Join(root, cfg.Output.Markdown, "README.md"))
