@@ -132,6 +132,38 @@ func TestRender(t *testing.T) {
 	}
 }
 
+func TestMeaningfulStringPlaceholders(t *testing.T) {
+	tests := map[string]string{
+		"id": `"id"`, "instanceId": `"instance-id"`, "operationID": `"operation-id"`,
+		"path": `"/path/to/file"`, "directory": `"/path/to/directory"`, "dataDirectory": `"/path/to/data"`,
+		"url": `"https://example.com"`, "name": `"Example"`, "version": `"1.0.0"`, "email": `"user@example.com"`,
+	}
+	for name, want := range tests {
+		if got := stringPlaceholder(name); got != want {
+			t.Errorf("stringPlaceholder(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestDuplicateTypeFiles(t *testing.T) {
+	types := []schema.Type{
+		{Name: "Result", QualifiedName: "example.com/foo.Result", PackageName: "foo", TSName: "foo.Result"},
+		{Name: "Result", QualifiedName: "example.com/bar.Result", PackageName: "bar", TSName: "bar.Result"},
+		{Name: "Result", QualifiedName: "other.example/foo.Result", PackageName: "foo", TSName: "foo.Result"},
+	}
+	files := allocateTypeFiles(types)
+	seen := map[string]bool{}
+	for _, file := range files {
+		if seen[file] {
+			t.Fatalf("duplicate type file %q", file)
+		}
+		seen[file] = true
+	}
+	if files["example.com/foo.Result"] != "foo.Result.md" || files["example.com/bar.Result"] != "bar.Result.md" {
+		t.Fatalf("unexpected files: %#v", files)
+	}
+}
+
 func TestTypeScriptSignatures(t *testing.T) {
 	tests := []struct {
 		name   string

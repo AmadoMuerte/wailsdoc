@@ -75,6 +75,41 @@ func TestGenericProject(t *testing.T) {
 	}
 }
 
+func TestExternalTypes(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	fixture := filepath.Join(filepath.Dir(file), "testdata", "external")
+	root := t.TempDir()
+	copyFixture(t, fixture, root)
+	copyFixture(t, filepath.Join(filepath.Dir(file), "testdata", "external-domain"), filepath.Join(filepath.Dir(root), "external-domain"))
+	cfg := config.Defaults()
+	cfg.Scan.Packages = []string{"./app"}
+	api, err := wailsdoc.Generate(context.Background(), root, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(api.Types) != 3 {
+		t.Fatalf("expected three reachable external types, got %#v", api.Types)
+	}
+	controller := api.Controllers[0]
+	if controller.Methods[1].Returns[0].TSType != "foo.Result" {
+		t.Fatalf("external TS name missing: %#v", controller.Methods)
+	}
+	for _, name := range []string{"foo.Result.md", "bar.Result.md", "Data.md"} {
+		if _, err := os.Stat(filepath.Join(root, cfg.Output.Markdown, "types", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fooPage, err := os.ReadFile(filepath.Join(root, cfg.Output.Markdown, "types", "foo.Result.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"external service", "Data.md", "Data contains the nested response payload", "ExternalController.Foo"} {
+		if !strings.Contains(string(fooPage), expected) {
+			t.Fatalf("external page lacks %q:\n%s", expected, fooPage)
+		}
+	}
+}
+
 func copyFixture(t *testing.T, source, target string) {
 	t.Helper()
 	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
