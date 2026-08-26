@@ -38,6 +38,7 @@ func Scan(ctx context.Context, options Options) (schema.API, error) {
 			packages.NeedDeps | packages.NeedModule,
 		Tests: false,
 	}
+	config.Mode |= packages.NeedImports
 	loaded, err := packages.Load(config, options.Packages...)
 	if err != nil {
 		return schema.API{}, fmt.Errorf("scan: load packages: %w", err)
@@ -100,12 +101,12 @@ func (s *state) scanPackage(pkg *packages.Package, suffix string) {
 			}
 			for parameter := 0; parameter < signature.Params().Len(); parameter++ {
 				value := signature.Params().At(parameter)
-				method.Parameters = append(method.Parameters, schema.Parameter{Name: value.Name(), GoType: typeString(value.Type(), pkg.Types), TSType: tsType(value.Type()), TypeRef: typeRef(value.Type()), TypeRefs: typeRefs(value.Type()), Nullable: nullable(value.Type())})
+				method.Parameters = append(method.Parameters, schema.Parameter{Name: value.Name(), GoType: typeString(value.Type(), pkg.Types), TSType: tsType(value.Type(), pkg.Types), TypeRef: typeRef(value.Type()), TypeRefs: typeRefs(value.Type()), Nullable: nullable(value.Type())})
 				s.resolve(value.Type())
 			}
 			for result := 0; result < signature.Results().Len(); result++ {
 				value := signature.Results().At(result)
-				method.Returns = append(method.Returns, schema.Return{Name: value.Name(), GoType: typeString(value.Type(), pkg.Types), TSType: tsType(value.Type()), TypeRef: typeRef(value.Type()), TypeRefs: typeRefs(value.Type()), Nullable: nullable(value.Type())})
+				method.Returns = append(method.Returns, schema.Return{Name: value.Name(), GoType: typeString(value.Type(), pkg.Types), TSType: tsType(value.Type(), pkg.Types), TypeRef: typeRef(value.Type()), TypeRefs: typeRefs(value.Type()), Nullable: nullable(value.Type())})
 				s.resolve(value.Type())
 			}
 			controller.Methods = append(controller.Methods, method)
@@ -127,13 +128,13 @@ func (s *state) resolve(typ types.Type) {
 		s.resolve(current.Key())
 		s.resolve(current.Elem())
 	case *types.Alias:
-		if object := current.Obj(); object != nil && s.projectType(object) {
+		if object := current.Obj(); object != nil && s.documentableType(object) {
 			s.addType(object, current, types.Unalias(current))
 		}
 		s.resolve(types.Unalias(current))
 	case *types.Named:
 		object := current.Obj()
-		if object == nil || !s.projectType(object) {
+		if object == nil || !s.documentableType(object) {
 			return
 		}
 		s.addType(object, current, current.Underlying())
@@ -147,7 +148,10 @@ func (s *state) addType(object *types.TypeName, declared, underlying types.Type)
 	}
 	s.seen[key] = true
 	pkg := s.packages[object.Pkg()]
-	entry := schema.Type{Name: object.Name(), QualifiedName: key, Kind: kind(underlying), Description: objectComment(pkg, object), Source: s.source(pkg, object.Pos())}
+	if pkg == nil {
+		return
+	}
+	entry := schema.Type{Name: object.Name(), QualifiedName: key, Package: object.Pkg().Path(), PackageName: object.Pkg().Name(), TSName: object.Pkg().Name() + "." + object.Name(), Kind: kind(underlying), Description: objectComment(pkg, object), Source: s.source(pkg, object.Pos())}
 	if structure, ok := underlying.(*types.Struct); ok {
 		entry.Fields = []schema.Field{}
 		for index := 0; index < structure.NumFields(); index++ {
@@ -159,12 +163,12 @@ func (s *state) addType(object *types.TypeName, declared, underlying types.Type)
 			if skip {
 				continue
 			}
-			entry.Fields = append(entry.Fields, schema.Field{Name: field.Name(), JSONName: jsonName, OmitEmpty: omitEmpty, Nullable: nullable(field.Type()), GoType: typeString(field.Type(), object.Pkg()), TSType: tsType(field.Type()), TypeRef: typeRef(field.Type()), TypeRefs: typeRefs(field.Type()), Description: objectComment(pkg, field)})
+			entry.Fields = append(entry.Fields, schema.Field{Name: field.Name(), JSONName: jsonName, OmitEmpty: omitEmpty, Nullable: nullable(field.Type()), GoType: typeString(field.Type(), object.Pkg()), TSType: tsType(field.Type(), object.Pkg()), TypeRef: typeRef(field.Type()), TypeRefs: typeRefs(field.Type()), Description: objectComment(pkg, field)})
 			s.resolve(field.Type())
 		}
 	} else {
 		entry.GoType = typeString(declared, object.Pkg())
-		entry.TSType = tsType(underlying)
+		entry.TSType = tsType(underlying, object.Pkg())
 		entry.TypeRef = typeRef(underlying)
 		entry.TypeRefs = typeRefs(underlying)
 		s.resolve(underlying)
@@ -172,13 +176,15 @@ func (s *state) addType(object *types.TypeName, declared, underlying types.Type)
 	s.api.Types = append(s.api.Types, entry)
 }
 
-func (s *state) projectType(object *types.TypeName) bool {
-	if object.Pkg() == nil || s.root == "" {
+func (s *state) documentableType(object *types.TypeName) bool {
+	if object.Pkg() == nil || !object.Exported() {
 		return false
 	}
 	pkg := s.packages[object.Pkg()]
-	return pkg != nil && pkg.Module != nil && filepath.Clean(pkg.Module.Dir) == s.root
+	return pkg != nil && !isStandardLibrary(object.Pkg().Path())
 }
+
+func isStandardLibrary(path string) bool { return !strings.Contains(strings.Split(path, "/")[0], ".") }
 
 func moduleRoot(packages_ []*packages.Package) string {
 	var root string
@@ -203,6 +209,11 @@ func indexPackages(roots []*packages.Package) map[*types.Package]*packages.Packa
 			result[pkg.Types] = pkg
 		}
 		for _, imported := range pkg.Imports {
+			if imported != nil && imported.Types != nil {
+				result[imported.Types] = imported
+			}
+		}
+		for _, imported := range pkg.Imports {
 			visit(imported)
 		}
 	}
@@ -216,7 +227,7 @@ func qualified(object *types.TypeName) string {
 	if object.Pkg() == nil {
 		return object.Name()
 	}
-	return object.Pkg().Name() + "." + object.Name()
+	return object.Pkg().Path() + "." + object.Name()
 }
 
 func typeRef(typ types.Type) string {
@@ -286,26 +297,32 @@ func nullable(typ types.Type) bool {
 	return ok
 }
 
-func tsType(typ types.Type) string {
+func tsType(typ types.Type, currentPkg *types.Package) string {
 	switch current := typ.(type) {
 	case *types.Pointer:
-		return tsType(current.Elem()) + " | null"
+		return tsType(current.Elem(), currentPkg) + " | null"
 	case *types.Slice:
-		return arrayTSType(current.Elem())
+		return arrayTSType(current.Elem(), currentPkg)
 	case *types.Array:
-		return arrayTSType(current.Elem())
+		return arrayTSType(current.Elem(), currentPkg)
 	case *types.Map:
-		return "Record<" + tsMapKey(current.Key()) + ", " + tsType(current.Elem()) + ">"
+		return "Record<" + tsMapKey(current.Key(), currentPkg) + ", " + tsType(current.Elem(), currentPkg) + ">"
 	case *types.Named:
 		if current.Obj().Pkg() != nil {
-			return current.Obj().Name()
+			if current.Obj().Pkg() == currentPkg {
+				return current.Obj().Name()
+			}
+			return current.Obj().Pkg().Name() + "." + current.Obj().Name()
 		}
-		return tsType(current.Underlying())
+		return tsType(current.Underlying(), currentPkg)
 	case *types.Alias:
 		if current.Obj().Pkg() != nil {
-			return current.Obj().Name()
+			if current.Obj().Pkg() == currentPkg {
+				return current.Obj().Name()
+			}
+			return current.Obj().Pkg().Name() + "." + current.Obj().Name()
 		}
-		return tsType(types.Unalias(current))
+		return tsType(types.Unalias(current), currentPkg)
 	case *types.Basic:
 		if current.Kind() == types.Bool {
 			return "boolean"
@@ -327,16 +344,16 @@ func tsType(typ types.Type) string {
 	}
 }
 
-func arrayTSType(element types.Type) string {
-	value := tsType(element)
+func arrayTSType(element types.Type, current *types.Package) string {
+	value := tsType(element, current)
 	if strings.Contains(value, " | ") {
 		value = "(" + value + ")"
 	}
 	return value + "[]"
 }
 
-func tsMapKey(typ types.Type) string {
-	value := tsType(typ)
+func tsMapKey(typ types.Type, current *types.Package) string {
+	value := tsType(typ, current)
 	if value == "string" || value == "number" {
 		return value
 	}
@@ -471,6 +488,9 @@ func (s *state) source(pkg *packages.Package, position token.Pos) schema.Source 
 	}
 	value := pkg.Fset.Position(position)
 	file := filepath.Clean(value.Filename)
+	if pkg.Module != nil && filepath.Clean(pkg.Module.Dir) != s.root {
+		return schema.Source{}
+	}
 	if s.root != "" {
 		if relative, err := filepath.Rel(s.root, file); err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			file = filepath.ToSlash(relative)

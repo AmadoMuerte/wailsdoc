@@ -53,6 +53,9 @@ type Return struct {
 type Type struct {
 	Name          string   `json:"name"`
 	QualifiedName string   `json:"qualifiedName"`
+	Package       string   `json:"package,omitempty"`
+	PackageName   string   `json:"packageName,omitempty"`
+	TSName        string   `json:"tsName,omitempty"`
 	Kind          string   `json:"kind"`
 	GoType        string   `json:"goType,omitempty"`
 	TSType        string   `json:"tsType,omitempty"`

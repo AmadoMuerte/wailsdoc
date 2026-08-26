@@ -2,6 +2,7 @@
 package markdown
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,10 +45,9 @@ func RenderTitle(api schema.API, outputDir, title string) (Coverage, error) {
 		sort.Slice(controllers[index].Methods, func(i, j int) bool { return controllers[index].Methods[i].Name < controllers[index].Methods[j].Name })
 	}
 
-	typeFiles := make(map[string]string, len(types))
+	typeFiles := allocateTypeFiles(types)
 	localPackages := map[string]bool{}
 	for _, typ := range types {
-		typeFiles[typ.QualifiedName] = typ.Name + ".md"
 		localPackages[packageName(typ.QualifiedName)] = true
 	}
 	for _, controller := range controllers {
@@ -71,7 +71,7 @@ func RenderTitle(api schema.API, outputDir, title string) (Coverage, error) {
 	if err := os.MkdirAll(filepath.Join(temporary, "types"), 0o755); err != nil {
 		return Coverage{}, fmt.Errorf("create type output: %w", err)
 	}
-	if err := write(filepath.Join(temporary, "README.md"), renderIndex(title, controllers, types)); err != nil {
+	if err := write(filepath.Join(temporary, "README.md"), renderIndex(title, controllers, types, typeFiles)); err != nil {
 		return Coverage{}, err
 	}
 	if err := write(filepath.Join(temporary, "METHODS.md"), renderMethodIndex(controllers)); err != nil {
@@ -83,7 +83,7 @@ func RenderTitle(api schema.API, outputDir, title string) (Coverage, error) {
 		}
 	}
 	for _, typ := range types {
-		if err := write(filepath.Join(temporary, "types", typ.Name+".md"), renderType(typ, typeFiles, usages[typ.QualifiedName])); err != nil {
+		if err := write(filepath.Join(temporary, "types", typeFiles[typ.QualifiedName]), renderType(typ, typeFiles, typeIndex, usages[typ.QualifiedName])); err != nil {
 			return Coverage{}, err
 		}
 	}
@@ -117,7 +117,7 @@ func coverageOf(controllers []schema.Controller, types []schema.Type) Coverage {
 	return result
 }
 
-func renderIndex(title string, controllers []schema.Controller, types []schema.Type) string {
+func renderIndex(title string, controllers []schema.Controller, types []schema.Type, typeFiles map[string]string) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "# %s\n\n", title)
 	output.WriteString(warning)
@@ -133,7 +133,7 @@ func renderIndex(title string, controllers []schema.Controller, types []schema.T
 	}
 	output.WriteString("\n## Methods\n\nSee the [global method index](METHODS.md).\n\n## Types\n\n")
 	for _, typ := range types {
-		fmt.Fprintf(&output, "- [%s](types/%s.md)\n", typ.Name, typ.Name)
+		fmt.Fprintf(&output, "- [%s](types/%s)\n", typeLabel(typ, types), typeFiles[typ.QualifiedName])
 	}
 	return output.String()
 }
@@ -224,7 +224,7 @@ func renderController(controller schema.Controller, typeFiles map[string]string,
 	return output.String()
 }
 
-func renderType(typ schema.Type, typeFiles map[string]string, usages []usage) string {
+func renderType(typ schema.Type, typeFiles map[string]string, types map[string]schema.Type, usages []usage) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "# %s\n\n", typ.Name)
 	output.WriteString(warning)
@@ -274,7 +274,7 @@ func renderType(typ schema.Type, typeFiles map[string]string, usages []usage) st
 			if use.Controller != "" {
 				fmt.Fprintf(&output, "- [%s.%s](../controllers/%s.md#%s) — %s", use.Controller, use.Method, use.Controller, anchor(use.Method), use.Kind)
 			} else {
-				fmt.Fprintf(&output, "- [%s](%s.md) — field", typeName(use.Type), typeName(use.Type))
+				fmt.Fprintf(&output, "- [%s](%s) — field", typeLabel(types[use.Type], mapValues(types)), typeFiles[use.Type])
 			}
 			if use.Name != "" {
 				fmt.Fprintf(&output, " `%s`", use.Name)
@@ -286,7 +286,7 @@ func renderType(typ schema.Type, typeFiles map[string]string, usages []usage) st
 	if len(related) > 0 {
 		output.WriteString("\n## Related types\n\n")
 		for _, reference := range related {
-			fmt.Fprintf(&output, "- [%s](%s)\n", typeName(reference), typeFiles[reference])
+			fmt.Fprintf(&output, "- [%s](%s)\n", typeLabel(types[reference], mapValues(types)), typeFiles[reference])
 		}
 	}
 	if typ.Source.File != "" {
@@ -442,7 +442,7 @@ func valueTSType(value, goType string) string {
 func tsExample(method schema.Method, types map[string]schema.Type) string {
 	arguments := make([]string, len(method.Parameters))
 	for index, parameter := range method.Parameters {
-		arguments[index] = tsValue(parameter.GoType, parameter.TypeRef, types, 0, map[string]bool{})
+		arguments[index] = tsValue(parameter.Name, parameter.GoType, parameter.TypeRef, types, 0, map[string]bool{})
 	}
 	name := lowerFirst(method.Name)
 	prefix := "await "
@@ -452,7 +452,7 @@ func tsExample(method schema.Method, types map[string]schema.Type) string {
 	return prefix + method.Name + "(" + strings.Join(arguments, ", ") + ")"
 }
 
-func tsValue(goType, reference string, types map[string]schema.Type, depth int, seen map[string]bool) string {
+func tsValue(name, goType, reference string, types map[string]schema.Type, depth int, seen map[string]bool) string {
 	if strings.HasPrefix(goType, "*") {
 		return "null"
 	}
@@ -472,14 +472,14 @@ func tsValue(goType, reference string, types map[string]schema.Type, depth int, 
 			if field.OmitEmpty {
 				continue
 			}
-			fields = append(fields, field.JSONName+": "+tsValue(field.GoType, field.TypeRef, types, depth+1, seen))
+			fields = append(fields, field.JSONName+": "+tsValue(field.JSONName, field.GoType, field.TypeRef, types, depth+1, seen))
 		}
 		delete(seen, reference)
 		return "{ " + strings.Join(fields, ", ") + " }"
 	}
 	switch valueTSType("", goType) {
 	case "string":
-		return `""`
+		return stringPlaceholder(name)
 	case "boolean":
 		return "false"
 	case "number":
@@ -487,6 +487,75 @@ func tsValue(goType, reference string, types map[string]schema.Type, depth int, 
 	default:
 		return "{}"
 	}
+}
+
+func stringPlaceholder(name string) string {
+	value := strings.ToLower(strings.ReplaceAll(name, "_", ""))
+	switch {
+	case strings.HasSuffix(value, "id"):
+		prefix := strings.TrimSuffix(value, "id")
+		if prefix == "" {
+			return `"id"`
+		}
+		return `"` + prefix + `-id"`
+	case strings.Contains(value, "email"):
+		return `"user@example.com"`
+	case strings.Contains(value, "url"):
+		return `"https://example.com"`
+	case strings.Contains(value, "datadirectory") || strings.Contains(value, "datapath"):
+		return `"/path/to/data"`
+	case strings.Contains(value, "directory"):
+		return `"/path/to/directory"`
+	case strings.Contains(value, "path"):
+		return `"/path/to/file"`
+	case value == "name" || strings.HasSuffix(value, "name") || value == "title":
+		return `"Example"`
+	case strings.Contains(value, "version"):
+		return `"1.0.0"`
+	default:
+		return `""`
+	}
+}
+
+func allocateTypeFiles(types []schema.Type) map[string]string {
+	counts := map[string]int{}
+	for _, typ := range types {
+		counts[typ.Name]++
+	}
+	result, used := map[string]string{}, map[string]bool{}
+	for _, typ := range types {
+		base := typ.Name
+		if counts[typ.Name] > 1 && typ.PackageName != "" {
+			base = typ.PackageName + "." + typ.Name
+		}
+		file := base + ".md"
+		if used[file] {
+			hash := sha256.Sum256([]byte(typ.QualifiedName))
+			file = fmt.Sprintf("%s-%x.md", base, hash[:4])
+		}
+		used[file], result[typ.QualifiedName] = true, file
+	}
+	return result
+}
+
+func typeLabel(typ schema.Type, types []schema.Type) string {
+	for _, other := range types {
+		if other.QualifiedName != typ.QualifiedName && other.Name == typ.Name {
+			if typ.TSName != "" {
+				return typ.TSName
+			}
+			return typ.QualifiedName
+		}
+	}
+	return typ.Name
+}
+
+func mapValues(types map[string]schema.Type) []schema.Type {
+	result := make([]schema.Type, 0, len(types))
+	for _, typ := range types {
+		result = append(result, typ)
+	}
+	return result
 }
 
 func relatedTypes(typ schema.Type, typeFiles map[string]string) []string {
