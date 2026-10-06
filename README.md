@@ -68,3 +68,5 @@ controller and type navigation, local search, syntax highlighting, responsive
 layout, and dark mode. Markdown-only output is always available.
 
 WailsDoc targets Wails v2 controller conventions. Wails v3 is not supported.
+
+More projects: [amadomuerte.ru](https://amadomuerte.ru).
