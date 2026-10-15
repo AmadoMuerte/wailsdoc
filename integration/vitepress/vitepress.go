@@ -51,14 +51,62 @@ func Prepare(root string, options Options) error {
 	return copyDir(filepath.Join(root, options.Markdown), target)
 }
 
-func Run(root, directory, command string) error {
-	if _, err := exec.LookPath("npm"); err != nil {
-		return fmt.Errorf("npm is required for VitePress %s", command)
+func Run(root, directory, command, packageManager string) error {
+	manager, err := ResolveManager(root, directory, packageManager)
+	if err != nil {
+		return err
 	}
-	cmd := exec.Command("npm", "run", command)
+	path, err := exec.LookPath(manager)
+	if err != nil {
+		return fmt.Errorf("%s is required for VitePress %s; install %s or set ui.packageManager", manager, command, manager)
+	}
+	cmd := exec.Command(path, "run", command)
 	cmd.Dir = filepath.Join(root, directory)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
+}
+
+// ResolveManager returns the package manager to use. An explicit manager is
+// returned as-is; "auto" (or empty) is detected from lockfile markers in the UI
+// directory, then the repository root, falling back to npm.
+func ResolveManager(root, directory, configured string) (string, error) {
+	switch configured {
+	case "", "auto":
+		return detectManager(root, directory), nil
+	case "bun", "npm", "pnpm", "yarn":
+		return configured, nil
+	default:
+		return "", fmt.Errorf("unsupported ui.packageManager %q; use auto, bun, npm, pnpm, or yarn", configured)
+	}
+}
+
+func detectManager(root, directory string) string {
+	for _, dir := range []string{filepath.Join(root, directory), root} {
+		if manager := detectInDir(dir); manager != "" {
+			return manager
+		}
+	}
+	return "npm"
+}
+
+func detectInDir(dir string) string {
+	markers := []struct {
+		manager string
+		names   []string
+	}{
+		{"bun", []string{"bun.lock", "bun.lockb", "bunfig.toml"}},
+		{"pnpm", []string{"pnpm-lock.yaml", "pnpm-workspace.yaml"}},
+		{"yarn", []string{"yarn.lock"}},
+		{"npm", []string{"package-lock.json"}},
+	}
+	for _, marker := range markers {
+		for _, name := range marker.names {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				return marker.manager
+			}
+		}
+	}
+	return ""
 }
 
 func relative(from, to string) string {

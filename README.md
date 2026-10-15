@@ -45,6 +45,7 @@ output:
 ui:
   provider: vitepress
   directory: docs/site
+  packageManager: auto
 wails:
   bindings: frontend/src/wailsjs/go/backend
 validation:
@@ -54,6 +55,40 @@ validation:
 ```
 
 CLI flags override configuration where supported.
+
+## Package Manager
+
+`ui.packageManager` selects the package manager used by `wailsdoc serve` and
+`wailsdoc build`. Accepted values are `auto` (default), `bun`, `npm`, `pnpm`,
+and `yarn`; any other value is a configuration error.
+
+With `auto`, WailsDoc inspects the UI directory and then the repository root for
+lockfiles and picks the matching manager:
+
+| Marker | Manager |
+| --- | --- |
+| `bun.lock`, `bun.lockb`, `bunfig.toml` | `bun` |
+| `pnpm-lock.yaml`, `pnpm-workspace.yaml` | `pnpm` |
+| `yarn.lock` | `yarn` |
+| `package-lock.json` | `npm` |
+
+When no marker is found it falls back to `npm`, so existing projects keep their
+current behavior. Set the field explicitly to skip detection.
+
+For a Bun project:
+
+```yaml
+ui:
+  provider: vitepress
+  directory: docs/site
+  packageManager: bun
+```
+
+```bash
+bun install --cwd docs/site
+wailsdoc generate
+wailsdoc serve
+```
 
 ## Markdown Only
 

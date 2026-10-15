@@ -137,7 +137,7 @@ func uiCommand(command string, args []string) error {
 	if _, err := wailsdoc.Generate(context.Background(), root, cfg); err != nil {
 		return err
 	}
-	return vitepress.Run(root, cfg.UI.Directory, map[string]string{"serve": "dev", "build": "build"}[command])
+	return vitepress.Run(root, cfg.UI.Directory, map[string]string{"serve": "dev", "build": "build"}[command], cfg.UI.PackageManager)
 }
 
 func load(path string) (string, string, config.Config, error) {
