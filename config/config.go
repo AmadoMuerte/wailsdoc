@@ -36,9 +36,14 @@ type Output struct {
 }
 
 type UI struct {
-	Provider  string `yaml:"provider"`
-	Directory string `yaml:"directory,omitempty"`
+	Provider       string `yaml:"provider"`
+	Directory      string `yaml:"directory,omitempty"`
+	PackageManager string `yaml:"packageManager,omitempty"`
 }
+
+// PackageManagers lists the accepted ui.packageManager values in detection
+// order: explicit managers first, auto last.
+var PackageManagers = []string{"auto", "bun", "npm", "pnpm", "yarn"}
 
 type Wails struct {
 	Bindings string `yaml:"bindings,omitempty"`
@@ -54,7 +59,7 @@ func Defaults() Config {
 		Project: Project{Name: "Wails App", Title: "Wails API"},
 		Scan:    Scan{Packages: []string{"."}},
 		Output:  Output{Schema: "docs/generated/wails-api.json", Markdown: "docs/generated/api"},
-		UI:      UI{Provider: "none", Directory: "docs/site"},
+		UI:      UI{Provider: "none", Directory: "docs/site", PackageManager: "auto"},
 	}
 }
 
@@ -79,7 +84,22 @@ func Load(path string) (Config, error) {
 	if result.UI.Provider != "none" && result.UI.Provider != "vitepress" {
 		return Config{}, fmt.Errorf("unsupported UI provider %q", result.UI.Provider)
 	}
+	if result.UI.PackageManager == "" {
+		result.UI.PackageManager = "auto"
+	}
+	if !validPackageManager(result.UI.PackageManager) {
+		return Config{}, fmt.Errorf("unsupported ui.packageManager %q; use auto, bun, npm, pnpm, or yarn", result.UI.PackageManager)
+	}
 	return result, nil
+}
+
+func validPackageManager(value string) bool {
+	for _, manager := range PackageManagers {
+		if value == manager {
+			return true
+		}
+	}
+	return false
 }
 
 func Marshal(value Config) ([]byte, error) {
